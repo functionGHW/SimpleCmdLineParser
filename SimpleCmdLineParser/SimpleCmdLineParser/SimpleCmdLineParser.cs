@@ -6,7 +6,10 @@ using System.Text;
 
 namespace SimpleCmdLineParser
 {
-
+    /// <summary>
+    /// 参数设置特性
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Property)]
     public class ArgumentAttribute : Attribute
     {
         public ArgumentAttribute()
@@ -18,9 +21,21 @@ namespace SimpleCmdLineParser
             TagName = tagName;
         }
 
+        /// <summary>
+        /// 参数标签名
+        /// </summary>
         public string TagName { get; set; }
-    }
 
+        /// <summary>
+        /// 表示该参数是可选的
+        /// </summary>
+        public bool Optional { get; set; }
+    }
+    
+
+    /// <summary>
+    /// 参数解析异常类，包含出错信息
+    /// </summary>
     public class ParserException : Exception
     {
         public ParserException(string message) : base(message)
@@ -28,12 +43,61 @@ namespace SimpleCmdLineParser
         }
     }
 
+
+    /// <summary>
+    /// 参数解析类
+    /// </summary>
     public class SimpleCmdLineParser
     {
+        private class ArgumentInfo
+        {
+            public string TagName { get; set; }
+
+            public bool Optional { get; set; }
+
+            public PropertyInfo Property { get; set; }
+
+            public bool IsSet { get; set; }
+        }
+
+        /// <summary>
+        /// 解析命令行参数
+        /// </summary>
+        /// <typeparam name="T">参数定义类型</typeparam>
+        /// <param name="args"></param>
+        /// <returns></returns>
+        /// <exception cref="ParserException">解析参数过程出错，Message包含错误说明</exception>
         public static T Parse<T>(string[] args)
         {
-            var resultType = typeof(T);
-            var mapper = new Dictionary<string, PropertyInfo>();
+            if (args == null)
+                throw new ArgumentNullException(nameof(args));
+
+            var result = Activator.CreateInstance<T>();
+            return (T)Parse(args, result, typeof(T));
+        }
+
+        /// <summary>
+        /// 解析命令行参数到指定的model对象中
+        /// </summary>
+        /// <typeparam name="T">参数定义类型</typeparam>
+        /// <param name="args"></param>
+        /// <param name="result"></param>
+        /// <param name="resultType"></param>
+        /// <returns></returns>
+        /// <exception cref="ParserException">解析参数过程出错，Message包含错误说明</exception>
+        public static object ParseToObject(string[] args, object result, Type resultType = null)
+        {
+            if (args == null)
+                throw new ArgumentNullException(nameof(args));
+            if (result == null)
+                throw new ArgumentNullException(nameof(result));
+
+            return Parse(args, result, resultType ?? result.GetType());
+        }
+
+        private static object Parse(string[] args, object result, Type resultType)
+        {
+            var mapper = new Dictionary<string, ArgumentInfo>();
             foreach (var p in resultType.GetProperties())
             {
                 var argAttr = p.GetCustomAttributes(typeof(ArgumentAttribute), true).FirstOrDefault() as ArgumentAttribute;
@@ -42,15 +106,25 @@ namespace SimpleCmdLineParser
 
                 // 未指定TagName，默认使用"--{PropertyName}"作为TagName
                 string tagName = string.IsNullOrEmpty(argAttr.TagName) ? "--" + p.Name : argAttr.TagName;
-                mapper.Add(tagName.ToLowerInvariant(), p);
+                tagName = tagName.ToLowerInvariant();
+                var argInfo = new ArgumentInfo()
+                {
+                    TagName = tagName,
+                    Optional = argAttr.Optional,
+                    Property = p
+                };
+                mapper.Add(tagName, argInfo);
             }
-            var result = Activator.CreateInstance<T>();
             int index = 0;
             while (index < args.Length)
             {
                 string tmp = args[index];
-                if (mapper.TryGetValue(tmp.Trim().ToLowerInvariant(), out var prop))
+                if (mapper.TryGetValue(tmp.Trim().ToLowerInvariant(), out var argInfo))
                 {
+                    if (argInfo.IsSet)
+                        throw new ParserException($"指定了重复参数：参数名={tmp}");
+
+                    var prop = argInfo.Property;
                     // 布尔参数不需要读取值
                     if (prop.PropertyType == typeof(bool)
                         || prop.PropertyType == typeof(bool?))
@@ -71,9 +145,16 @@ namespace SimpleCmdLineParser
                             throw new ParserException($"参数值转换错误: 参数名={tmp}");
                         }
                     }
+                    argInfo.IsSet = true;
                 }
                 index++;
             }
+            foreach (var item in mapper.Values)
+            {
+                if (!item.Optional && !item.IsSet)
+                    throw new ParserException($"缺少必须的参数：参数名={item.TagName}");
+            }
+            
             return result;
         }
 
