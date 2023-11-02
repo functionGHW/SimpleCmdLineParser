@@ -30,8 +30,29 @@ namespace SimpleCmdLineParser
         /// 表示该参数是可选的
         /// </summary>
         public bool Optional { get; set; }
+
+        /// <summary>
+        /// 参数帮助说明文本
+        /// </summary>
+        public string HelpText { get; set; }
     }
-    
+
+    /// <summary>
+    /// 参数类型标识
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Class)]
+    public class ArgumentTypeAttribute : Attribute
+    {
+        public ArgumentTypeAttribute(string helpText)
+        {
+            HelpText = helpText;
+        }
+
+        /// <summary>
+        /// 帮助文本
+        /// </summary>
+        public string HelpText { get; set; }
+    }
 
     /// <summary>
     /// 参数解析异常类，包含出错信息
@@ -49,6 +70,18 @@ namespace SimpleCmdLineParser
     /// </summary>
     public class SimpleCmdLineParser
     {
+        /// <summary>
+        /// 版本号标识
+        /// </summary>
+        public const string Version = "1.0.0.0";
+
+        /// <summary>
+        /// 默认的参数帮助文本
+        /// </summary>
+        public static string DefaultHelpText { get; set; } = "No description.";
+
+        public static string OptionalHelpText { get; set; } = "Optional";
+
         private class ArgumentInfo
         {
             public string TagName { get; set; }
@@ -57,7 +90,55 @@ namespace SimpleCmdLineParser
 
             public PropertyInfo Property { get; set; }
 
+            public string HelpText { get; set; }
+
+            // 参数是否被设置，用于检查必要参数是否缺失
             public bool IsSet { get; set; }
+        }
+
+        /// <summary>
+        /// 获取格式化的帮助信息文本，包含参数的解释说明
+        /// </summary>
+        /// <param name="argumentType"></param>
+        /// <returns></returns>
+        public static string GetHelpText(Type argumentType)
+        {
+            var builder = new StringBuilder();
+            var typeAttr = argumentType.GetCustomAttributes(typeof(ArgumentTypeAttribute), true)
+                .FirstOrDefault() as ArgumentTypeAttribute;
+            string helpText = typeAttr?.HelpText ?? DefaultHelpText;
+            builder.AppendLine(helpText);
+
+            var mapper = BuildArgumentInfoMapper(argumentType);
+            var argumentInfos = mapper.Values.ToArray();
+            if (argumentInfos.Length == 0)
+                return builder.ToString();
+
+            const int tabSize = 2;
+            const char spaceChar = ' ';
+            int maxLength = tabSize + argumentInfos.Select(x => x.TagName.Length).Max();
+            string multipleLineTextPrefix = new string(spaceChar, tabSize + maxLength);
+
+            builder.AppendLine("\nUsage:");
+            foreach (var arg in argumentInfos)
+            {
+                string argHelpText = BuildHelpText(multipleLineTextPrefix, arg);
+                builder.Append(spaceChar, tabSize);
+                builder.AppendLine($"{arg.TagName.PadRight(maxLength)}{argHelpText}");
+            }
+            return builder.ToString();
+        }
+
+        private static string BuildHelpText(string multipleLineTextPrefix, ArgumentInfo arg)
+        {
+            string helpText = arg.Optional ? $"({OptionalHelpText}){arg.HelpText}" : arg.HelpText;
+            var textLines = helpText.Split('\n');
+            for (var i = 1; i < textLines.Length; i++)
+            {
+                textLines[i] = multipleLineTextPrefix + textLines[i];
+            }
+            helpText = string.Join("\n", textLines);
+            return helpText;
         }
 
         /// <summary>
@@ -97,24 +178,7 @@ namespace SimpleCmdLineParser
 
         private static object Parse(string[] args, object result, Type resultType)
         {
-            var mapper = new Dictionary<string, ArgumentInfo>();
-            foreach (var p in resultType.GetProperties())
-            {
-                var argAttr = p.GetCustomAttributes(typeof(ArgumentAttribute), true).FirstOrDefault() as ArgumentAttribute;
-                if (argAttr == null)
-                    continue;
-
-                // 未指定TagName，默认使用"--{PropertyName}"作为TagName
-                string tagName = string.IsNullOrEmpty(argAttr.TagName) ? "--" + p.Name : argAttr.TagName;
-                tagName = tagName.ToLowerInvariant();
-                var argInfo = new ArgumentInfo()
-                {
-                    TagName = tagName,
-                    Optional = argAttr.Optional,
-                    Property = p
-                };
-                mapper.Add(tagName, argInfo);
-            }
+            var mapper = BuildArgumentInfoMapper(resultType);
             int index = 0;
             while (index < args.Length)
             {
@@ -154,8 +218,34 @@ namespace SimpleCmdLineParser
                 if (!item.Optional && !item.IsSet)
                     throw new ParserException($"缺少必须的参数：参数名={item.TagName}");
             }
-            
+
             return result;
+        }
+
+        private static Dictionary<string, ArgumentInfo> BuildArgumentInfoMapper(Type resultType)
+        {
+            var mapper = new Dictionary<string, ArgumentInfo>();
+            foreach (var p in resultType.GetProperties())
+            {
+                var argAttr = p.GetCustomAttributes(typeof(ArgumentAttribute), true)
+                    .FirstOrDefault() as ArgumentAttribute;
+                if (argAttr == null)
+                    continue;
+
+                // 未指定TagName，默认使用"--{PropertyName}"作为TagName
+                string tagName = string.IsNullOrEmpty(argAttr.TagName) ? "--" + p.Name : argAttr.TagName;
+                tagName = tagName.ToLowerInvariant();
+                var argInfo = new ArgumentInfo()
+                {
+                    TagName = tagName,
+                    Optional = argAttr.Optional,
+                    Property = p,
+                    HelpText = argAttr.HelpText ?? DefaultHelpText,
+                };
+                mapper.Add(tagName, argInfo);
+            }
+
+            return mapper;
         }
 
         private static object ConvertData(object value, Type targetType)

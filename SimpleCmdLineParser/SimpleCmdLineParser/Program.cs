@@ -9,11 +9,14 @@ namespace SimpleCmdLineParser
     {
         static void Main(string[] args)
         {
-            args = new[] {"--path", @"C:\Windows", "--test", "--enable", "--nouse", "should not be read"};
+            args = new[] { "-h", "--path", @"C:\Windows", "--test", "--enable", "--nouse", "should not be read" };
             try
             {
                 var result = SimpleCmdLineParser.Parse<TestClass>(args);
                 Console.WriteLine($"{result.Path}, {result.Enable}, {result.NoUse}");
+
+                if (result.ShowHelp)
+                    Console.WriteLine(SimpleCmdLineParser.GetHelpText(typeof(TestClass)));
             }
             catch (ParserException ex)
             {
@@ -22,13 +25,21 @@ namespace SimpleCmdLineParser
             Console.ReadLine();
         }
 
+        [ArgumentType("This program is used to do something with computer.\n" +
+            "Here is the description of the arguments")]
         public class TestClass
         {
-            [Argument("--path")]
+            [Argument("-h", Optional = true, HelpText = "Show help info.")]
+            public bool ShowHelp { get; set; }
+
+            [Argument("--path", HelpText = "Input directory path.")]
             public string Path { get; set; }
 
-            [Argument()]
+            [Argument(HelpText = "Enable some feature.\nIf enable then some thing will happen.\nOtherwise, no change\n")]
             public bool? Enable { get; set; }
+
+            [Argument("-i", Optional = true, HelpText = "The index number.")]
+            public int Index { get; set; }
 
             // 没有ArgumentAttribute的属性不予解析
             public string NoUse { get; set; }
