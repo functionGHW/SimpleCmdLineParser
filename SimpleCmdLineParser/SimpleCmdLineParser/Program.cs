@@ -9,7 +9,17 @@ namespace SimpleCmdLineParser
     {
         static void Main(string[] args)
         {
-            args = new[] { "-h", "--path", @"C:\Windows", "--test", "--enable", "--nouse", "should not be read" };
+            args = new[] {
+                "--help",
+                "--path",
+                @"C:\Windows",
+                "--test",
+                "--enable",
+                "--nouse",
+                "should not be read",
+                "-i",
+                "123",
+            };
             try
             {
                 var result = SimpleCmdLineParser.Parse<TestClass>(args);
@@ -29,16 +39,16 @@ namespace SimpleCmdLineParser
             "Here is the description of the arguments")]
         public class TestClass
         {
-            [Argument("-h", Optional = true, HelpText = "Show help info.")]
+            [ShowHelp()]
             public bool ShowHelp { get; set; }
 
-            [Argument("--path", HelpText = "Input directory path.")]
+            [Argument("--path|-p", HelpText = "Input directory path.")]
             public string Path { get; set; }
 
             [Argument(HelpText = "Enable some feature.\nIf enable then some thing will happen.\nOtherwise, no change\n")]
             public bool? Enable { get; set; }
 
-            [Argument("-i", Optional = true, HelpText = "The index number.")]
+            [Argument("-i|--index", HelpText = "The index number.")]
             public int Index { get; set; }
 
             // 没有ArgumentAttribute的属性不予解析

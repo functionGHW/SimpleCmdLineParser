@@ -37,6 +37,18 @@ namespace SimpleCmdLineParser
         public string HelpText { get; set; }
     }
 
+    public class ShowHelpAttribute : ArgumentAttribute
+    {
+        public ShowHelpAttribute() : this("--help|-h")
+        {
+        }
+        public ShowHelpAttribute(string tagName) : base(tagName)
+        {
+            Optional = true;
+            HelpText = "Show help info.";
+        }
+    }
+
     /// <summary>
     /// 参数类型标识
     /// </summary>
@@ -80,11 +92,12 @@ namespace SimpleCmdLineParser
         /// </summary>
         public static string DefaultHelpText { get; set; } = "No description.";
 
-        public static string OptionalHelpText { get; set; } = "Optional";
-
         private class ArgumentInfo
         {
-            public string TagName { get; set; }
+            //public string TagName { get; set; }
+
+            public string ShortTagName { get; set; }
+            public string FullTagName { get; set; }
 
             public bool Optional { get; set; }
 
@@ -92,7 +105,9 @@ namespace SimpleCmdLineParser
 
             public string HelpText { get; set; }
 
-            // 参数是否被设置，用于检查必要参数是否缺失
+            public bool IsShowHelp { get; set; }
+
+            // 参数是否被设置，用于检查必要参数是否缺失以及重复传参
             public bool IsSet { get; set; }
         }
 
@@ -109,29 +124,35 @@ namespace SimpleCmdLineParser
             string helpText = typeAttr?.HelpText ?? DefaultHelpText;
             builder.AppendLine(helpText);
 
-            var mapper = BuildArgumentInfoMapper(argumentType);
-            var argumentInfos = mapper.Values.ToArray();
+            var argumentInfos = BuildArgumentInfoList(argumentType);
             if (argumentInfos.Length == 0)
                 return builder.ToString();
 
             const int tabSize = 2;
             const char spaceChar = ' ';
-            int maxLength = tabSize + argumentInfos.Select(x => x.TagName.Length).Max();
-            string multipleLineTextPrefix = new string(spaceChar, tabSize + maxLength);
+            int maxFullTagLength = argumentInfos.Select(x => x.FullTagName.Length).Max();
+            int maxShortTagLength = argumentInfos.Select(x => x.ShortTagName.Length).Max();
+
+            int helpTextPaddingSize = 3 * tabSize + maxFullTagLength + maxShortTagLength;
+            string multipleLineTextPrefix = new string(spaceChar, helpTextPaddingSize);
 
             builder.AppendLine("\nUsage:");
             foreach (var arg in argumentInfos)
             {
                 string argHelpText = BuildHelpText(multipleLineTextPrefix, arg);
                 builder.Append(spaceChar, tabSize);
-                builder.AppendLine($"{arg.TagName.PadRight(maxLength)}{argHelpText}");
+                builder.Append(arg.FullTagName.PadRight(maxFullTagLength));
+                builder.Append(spaceChar, tabSize);
+                builder.Append(arg.ShortTagName.PadRight(maxShortTagLength));
+                builder.Append(spaceChar, tabSize);
+                builder.AppendLine(argHelpText);
             }
             return builder.ToString();
         }
 
         private static string BuildHelpText(string multipleLineTextPrefix, ArgumentInfo arg)
         {
-            string helpText = arg.Optional ? $"({OptionalHelpText}){arg.HelpText}" : arg.HelpText;
+            string helpText = arg.HelpText;
             var textLines = helpText.Split('\n');
             for (var i = 1; i < textLines.Length; i++)
             {
@@ -178,12 +199,13 @@ namespace SimpleCmdLineParser
 
         private static object Parse(string[] args, object result, Type resultType)
         {
-            var mapper = BuildArgumentInfoMapper(resultType);
+            var argList = BuildArgumentInfoList(resultType);
             int index = 0;
             while (index < args.Length)
             {
-                string tmp = args[index];
-                if (mapper.TryGetValue(tmp.Trim().ToLowerInvariant(), out var argInfo))
+                string tmp = args[index].Trim().ToLowerInvariant();
+                var argInfo = argList.FirstOrDefault(x => x.FullTagName == tmp || x.ShortTagName == tmp);
+                if (argInfo != null)
                 {
                     if (argInfo.IsSet)
                         throw new ParserException($"指定了重复参数：参数名={tmp}");
@@ -213,18 +235,52 @@ namespace SimpleCmdLineParser
                 }
                 index++;
             }
-            foreach (var item in mapper.Values)
+            bool isShowHelp = argList.Any(x => x.IsShowHelp && x.IsSet);
+            if (isShowHelp)
+                return result;
+
+            foreach (var item in argList)
             {
                 if (!item.Optional && !item.IsSet)
-                    throw new ParserException($"缺少必须的参数：参数名={item.TagName}");
+                {
+                    string argName = string.IsNullOrEmpty(item.FullTagName) ? item.ShortTagName : item.FullTagName;
+                    throw new ParserException($"缺少必须的参数：参数名={argName}");
+                }
             }
-
             return result;
         }
 
-        private static Dictionary<string, ArgumentInfo> BuildArgumentInfoMapper(Type resultType)
+        private static void ParseTagName(string tagName, out string shortTagName, out string fullTagName)
         {
-            var mapper = new Dictionary<string, ArgumentInfo>();
+            var tags = tagName.Split("|".ToCharArray(), StringSplitOptions.RemoveEmptyEntries);
+            if (tags.Length > 2)
+                throw new ParserException($"参数定义错误：无法解析的格式\"{tagName}\"");
+
+            shortTagName = "";
+            fullTagName = "";
+
+            for (int i = 0; i < tags.Length; i++)
+            {
+                string tag = tags[i].Trim();
+                if (tag.StartsWith("--"))
+                {
+                    fullTagName = tag;
+                }
+                else if (tag.StartsWith("-"))
+                {
+                    shortTagName = tag;
+                }
+                else
+                {
+                    throw new ParserException($"参数定义错误：无法解析的格式\"{tagName}\"");
+                }
+            }
+
+        }
+
+        private static ArgumentInfo[] BuildArgumentInfoList(Type resultType)
+        {
+            var result = new List<ArgumentInfo>();
             foreach (var p in resultType.GetProperties())
             {
                 var argAttr = p.GetCustomAttributes(typeof(ArgumentAttribute), true)
@@ -233,19 +289,22 @@ namespace SimpleCmdLineParser
                     continue;
 
                 // 未指定TagName，默认使用"--{PropertyName}"作为TagName
-                string tagName = string.IsNullOrEmpty(argAttr.TagName) ? "--" + p.Name : argAttr.TagName;
+                string tagName = string.IsNullOrEmpty(argAttr.TagName) ? $"--{p.Name}" : argAttr.TagName;
                 tagName = tagName.ToLowerInvariant();
+                ParseTagName(tagName, out string shortTag, out string fullTag);
                 var argInfo = new ArgumentInfo()
                 {
-                    TagName = tagName,
+                    FullTagName = fullTag,
+                    ShortTagName = shortTag,
                     Optional = argAttr.Optional,
                     Property = p,
+                    IsShowHelp = argAttr is ShowHelpAttribute,
                     HelpText = argAttr.HelpText ?? DefaultHelpText,
                 };
-                mapper.Add(tagName, argInfo);
+                result.Add(argInfo);
             }
 
-            return mapper;
+            return result.ToArray();
         }
 
         private static object ConvertData(object value, Type targetType)
